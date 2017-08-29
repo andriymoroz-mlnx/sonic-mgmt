@@ -1,6 +1,5 @@
-#
-# ansible-playbook test_sonic.yml -i inventory --limit arc-switch1028 --tags buffer_profile -e skip_interface_check=true
-#
+# Usage example:
+#   ansible-playbook test_sonic.yml -i inventory --limit arc-switch1028 --tags buffer_profile -e skip_interface_check=true
 #
 
 - set_fact:
@@ -34,3 +33,72 @@
   vars:
     ansible_shell_type: docker
     ansible_python_interpreter: docker exec -i swss python
+
+- block:
+    - name: Get original port speed
+      shell: docker exec database redis-cli hget PORT_TABLE:{{port_name}} speed
+      register: org_speed
+      failed_when: org_speed.rc != 0
+
+    - set_fact:
+        original_speed="{{org_speed.stdout[:-3]}}G"
+
+    - debug: msg="Original port speed {{original_speed}}"
+
+    - name: Set Port Speed to 100G
+      shell: swssconfig /tmp/100G.json
+      vars:
+        ansible_shell_type: docker
+        ansible_python_interpreter: docker exec -i swss python
+
+    - name: Pause 2 sec
+      pause:
+        seconds: 2
+
+    - name: Check profile for 100G
+      shell: docker exec database redis-cli hgetall BUFFER_PG_TABLE:{{port_name}}:3-4 | grep BUFFER_PROFILE_TABLE
+      register: buffer_profile
+      failed_when: buffer_profile.rc != 0
+
+    - set_fact:
+        profile100g="{{buffer_profile.stdout.split(':')[1][:-1]}}"
+
+    - debug: msg="100G profile {{profile100g}}"
+
+    - fail: msg="Invalid profile for 100G"
+      when: profile100g.split('_')[2] != '100G'
+
+    - name: Set Port Speed to 40G
+      shell: swssconfig /tmp/40G.json
+      vars:
+        ansible_shell_type: docker
+        ansible_python_interpreter: docker exec -i swss python
+
+    - name: Pause 2 sec
+      pause:
+        seconds: 2
+
+    - name: Check profile for 40G
+      shell: docker exec database redis-cli hgetall BUFFER_PG_TABLE:{{port_name}}:3-4 | grep BUFFER_PROFILE_TABLE
+      register: buffer_profile
+      failed_when: buffer_profile.rc != 0
+
+    - set_fact:
+        profile40g="{{buffer_profile.stdout.split(':')[1][:-1]}}"
+
+    - debug: msg="40G profile {{profile40g}}"
+
+    - fail: msg="Invalid profile for 40G"
+      when: profile40g.split('_')[2] != '40G'
+
+  always:
+    - name: Pause 2 sec
+      pause:
+        seconds: 2
+
+    - name: Restore Port Speed
+      shell: swssconfig /tmp/{{original_speed}}.json
+      when: original_speed is defined
+      vars:
+        ansible_shell_type: docker
+        ansible_python_interpreter: docker exec -i swss python
